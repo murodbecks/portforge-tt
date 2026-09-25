@@ -1,0 +1,71 @@
+{
+ "schema_version": 1,
+ "verified_date": "2026-09-24",
+ "verification": [
+  "published_large_file_hashes: model.safetensors SHA-256/size from the official Hugging Face LFS pointer API at the pinned revision",
+  "small_file_hashes: config.json and README.md SHA-256 computed from raw bytes fetched at the pinned revision",
+  "parameter_count: 119477664 float32 parameters reported by the official safetensors index",
+  "scope: Checkpoint identity and architecture metadata; not a claim of successful accelerator execution or support at every precision."
+ ],
+ "models": {
+  "chronos2": {
+   "repo_id": "amazon/chronos-2",
+   "revision": "29ec3766d36d6f73f0696f85560a422f50e8498c",
+   "license": "apache-2.0",
+   "checkpoint_format": "safetensors",
+   "weight_files": ["model.safetensors"],
+   "weight_index": null,
+   "files": {
+    "config.json": {
+     "sha256": "ef1143bfdc9c0376d9a056eefca46cb4b1ec3d0ffacd541ff56feb40fb708031",
+     "bytes": 1067
+    },
+    "model.safetensors": {
+     "sha256": "ddcda3c7508bf2528087723e98a20707cc04b7f370ae275a9fd88078ddba4f42",
+     "bytes": 477930472
+    },
+    "README.md": {
+     "sha256": "c7b29bc88f5bc3ebc6e7213b6353be80090d671fefa4aa74ed20498838c16558",
+     "bytes": 7773
+    }
+   },
+   "architecture": {
+    "model_type": "t5",
+    "architectures": ["Chronos2Model"],
+    "d_model": 768,
+    "d_ff": 3072,
+    "d_kv": 64,
+    "num_heads": 12,
+    "num_layers": 12,
+    "feed_forward_proj": "relu",
+    "layer_norm_epsilon": 1e-06,
+    "vocab_size": 2,
+    "pad_token_id": 0,
+    "reg_token_id": 1,
+    "rope_theta": 10000.0,
+    "use_cache": true,
+    "chronos_config": {
+     "context_length": 8192,
+     "input_patch_size": 16,
+     "input_patch_stride": 16,
+     "max_output_patches": 64,
+     "output_patch_size": 16,
+     "quantiles": [
+      0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
+      0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99
+     ],
+     "time_encoding_scale": 8192,
+     "use_arcsinh": true,
+     "use_reg_token": true
+    }
+   },
+   "source_urls": [
+    "https://huggingface.co/api/models/amazon/chronos-2?blobs=true",
+    "https://huggingface.co/amazon/chronos-2/tree/29ec3766d36d6f73f0696f85560a422f50e8498c",
+    "https://huggingface.co/amazon/chronos-2/resolve/29ec3766d36d6f73f0696f85560a422f50e8498c/config.json",
+    "https://github.com/amazon-science/chronos-forecasting",
+    "https://arxiv.org/abs/2510.15821"
+   ]
+  }
+ }
+}

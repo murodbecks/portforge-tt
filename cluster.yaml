@@ -1,0 +1,56 @@
+# PortForge-TT machine inventory. Copy this file, fill every <placeholder>, and
+# pass it with --cluster. The loader rejects placeholders on purpose: every path
+# must be absolute and every host explicit before a campaign can start.
+#
+# Two remote roles, one host each:
+#   tt         a Tenstorrent host with a built TT-Metal checkout and a Python
+#              environment that imports ttnn and torch
+#   reference  a host that runs the model's reference implementation in FP32
+#              (an NVIDIA GPU is preferred; CPU works and is recorded)
+# The CHIA controller and the coding agents run on the machine you launch from.
+cluster_name: portforge-tt
+provider:
+  head_ip: 127.0.0.1
+auth:
+  ssh_user: <tt-user>
+  ssh_private_key: ~/.ssh/<tt-key>
+  overrides:
+    <reference-host>:
+      ssh_user: <reference-user>
+      ssh_private_key: ~/.ssh/<reference-key>
+available_node_types:
+  tt:
+    compatible_ips:
+    - <tt-host>
+    num_workers: 1
+    resources:
+      tt: 1               # number of cards campaigns may use in parallel
+  reference:
+    compatible_ips:
+    - <reference-host>
+    num_workers: 1
+    resources:
+      reference: 1
+porting:
+  tt:
+    work_dir: /home/<tt-user>/portforge          # per-run archives, leases and card health
+    python: /home/<tt-user>/tt-metal/python_env/bin/python  # imports ttnn, torch, numpy, pytest
+    metal: /home/<tt-user>/tt-metal               # built TT-Metal checkout (mounted read-only)
+    metal_commit: <tt-metal-commit-sha>           # must match `git -C <metal> rev-parse HEAD`
+    weights_by_model:                             # one entry per pack delivery model
+      <model-key>: /home/<tt-user>/portforge/checkpoints/<model-key>
+    health_dir: /home/<tt-user>/portforge/card-health
+    lease_dir: /home/<tt-user>/portforge
+    runtime_mounts:       # directories the TT Python environment needs inside the sandbox
+    - /opt/tenstorrent
+    - /home/<tt-user>/tt-metal/python_env
+    cards:                # PCI addresses the runner may lease (see `ls /dev/tenstorrent`, tt-smi)
+    - '0000:00:00.0'
+    host_memory_limit_bytes: 34359738368          # per-job host RSS limit (1-128 GiB)
+    full_timeout_seconds: 21600                   # outer deadline of the frozen full evaluation
+  reference:
+    work_dir: /home/<reference-user>/portforge
+    python: /home/<reference-user>/portforge/.venv/bin/python  # built by setup_reference.sh
+    hf_home: /home/<reference-user>/portforge/hf-cache
+    executor: direct      # direct (run on the host) or slurm (see cluster.py for partition fields)
+    known_hosts: ~/.ssh/known_hosts

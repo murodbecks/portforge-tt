@@ -1,0 +1,50 @@
+{
+ "schema_version": 1,
+ "verified_date": "2026-09-24",
+ "verification": [
+  "published_large_file_hashes: model.safetensors SHA-256/size from the official Hugging Face LFS pointer API at the pinned revision",
+  "small_file_hashes: config/tokenizer files SHA-256 computed from raw bytes fetched at the pinned revision",
+  "scope: Checkpoint identity and architecture metadata; not a claim of accelerator execution. The repository also ships pytorch_model.bin and tf_model.h5 duplicates which are NOT part of this pinned manifest."
+ ],
+ "models": {
+  "esm2": {
+   "repo_id": "facebook/esm2_t33_650M_UR50D",
+   "revision": "08e4846e537177426273712802403f7ba8261b6c",
+   "license": "mit",
+   "checkpoint_format": "safetensors",
+   "weight_files": ["model.safetensors"],
+   "weight_index": null,
+   "files": {
+    "config.json": {"sha256": "539095c22efc52a09d6147074ba4ca119f76a890df5901213b2b55f7d2f96b2b", "bytes": 724},
+    "model.safetensors": {"sha256": "a08adabb949fa67ad3c14b509d04fd60368b35007b0095e3358f81200c4f4db0", "bytes": 2609506392},
+    "special_tokens_map.json": {"sha256": "3aedcd4211c0d43aec4e607ff60a63255f3174ead795e997350f09a5f8cd9ee1", "bytes": 125},
+    "tokenizer_config.json": {"sha256": "7e9161ecdb548ec45a41cbc6b24aa4476fdd418461f491c4207baa99419a29ad", "bytes": 95},
+    "vocab.txt": {"sha256": "0b82cc0a7c7cf9e567b1e5892d793285b9fbae822c964ca48696f7db44598e03", "bytes": 93}
+   },
+   "architecture": {
+    "model_type": "esm",
+    "architectures": ["EsmForMaskedLM"],
+    "hidden_size": 1280,
+    "intermediate_size": 5120,
+    "num_hidden_layers": 33,
+    "num_attention_heads": 20,
+    "vocab_size": 33,
+    "mask_token_id": 32,
+    "pad_token_id": 1,
+    "max_position_embeddings": 1026,
+    "position_embedding_type": "rotary",
+    "hidden_act": "gelu",
+    "layer_norm_eps": 1e-05,
+    "token_dropout": true,
+    "use_cache": true
+   },
+   "source_urls": [
+    "https://huggingface.co/api/models/facebook/esm2_t33_650M_UR50D?blobs=true",
+    "https://huggingface.co/facebook/esm2_t33_650M_UR50D/tree/08e4846e537177426273712802403f7ba8261b6c",
+    "https://huggingface.co/facebook/esm2_t33_650M_UR50D/resolve/08e4846e537177426273712802403f7ba8261b6c/config.json",
+    "https://www.science.org/doi/10.1126/science.ade2574",
+    "https://github.com/facebookresearch/esm"
+   ]
+  }
+ }
+}

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Campaign artifacts (large, machine-specific)
+runs/
+!runs/data/
+*.log
+*.launch.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# pytest
+.pytest_cache/
+generated/

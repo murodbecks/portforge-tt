@@ -1,0 +1,35 @@
+{
+ "schema_version": 1,
+ "verified_date": "YYYY-MM-DD",
+ "verification": [
+  "Record how each hash below was obtained (e.g. Hugging Face LFS pointer API at the pinned revision)."
+ ],
+ "models": {
+  "my-model": {
+   "repo_id": "TODO/hf-repo-id",
+   "revision": "0000000000000000000000000000000000000000",
+   "license": "TODO",
+   "checkpoint_format": "safetensors",
+   "weight_files": [
+    "model.safetensors"
+   ],
+   "weight_index": null,
+   "files": {
+    "config.json": {
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+     "bytes": 1
+    },
+    "model.safetensors": {
+     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+     "bytes": 1
+    }
+   },
+   "architecture": {
+    "model_type": "TODO: copy the config.json fields the port depends on"
+   },
+   "source_urls": [
+    "https://huggingface.co/TODO/hf-repo-id"
+   ]
+  }
+ }
+}
