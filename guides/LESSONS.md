@@ -66,3 +66,9 @@ rule cost hours to days when it was broken.
     (`tt/ demo/ reference/ tests/ benchmarks/ docs/`, SPDX headers, a README
     with measured evidence). A late layout change invalidated benchmark
     provenance once.
+
+18. **Use the host repo's device fixture in upstream tests.** Tests that open a
+    TT device with ttnn.open_device(device_id=0) cannot take device_params from
+    CI. When contributing tests to an upstream repo, use its device pytest
+    fixture instead (the conftest at the repo root provides it). For portforge-tt
+    standalone testing, a local device fixture in tests/conftest.py is fine.
