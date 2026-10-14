@@ -66,11 +66,3 @@ rule cost hours to days when it was broken.
     (`tt/ demo/ reference/ tests/ benchmarks/ docs/`, SPDX headers, a README
     with measured evidence). A late layout change invalidated benchmark
     provenance once.
-
-18. **Upstream PR discipline** (learned from tt-metal PR reviews). Tests must be
-    pytest functions with real assertions — `main()` scripts that only print are
-    rejected. Resolve checkpoints from env vars, never `/weights`. Import from
-    the actual package path, never a `backend` module. NRMSE gates need ~30%
-    headroom over the worst measured value. Format with black + isort. Remove
-    references to dev probes not in the PR. Add the Tier 3 CI entry only after
-    review approval, and ask the user for their Slack member ID (never guess).
