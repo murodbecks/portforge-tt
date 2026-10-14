@@ -12,15 +12,16 @@ import unittest
 import unittest.mock
 from unittest.mock import patch
 
-import agent
-from chia.models.opencode import (RateLimitError, AuthenticationError, BillingError,
-                                  InvalidRequestError)
+import agents.agent as agent
+from agents.errors import (RateLimitError, AuthenticationError, BillingError,
+                           InvalidRequestError)
 
 
 def make_agent(web=True, repository='/workspace/original-repository', **kwargs):
     return agent.IsolatedOpenCode(model=agent.MODEL, agent_name='portforge-worker',
                                   web=web, repository=Path(repository),
-                                  dangerously_skip_permissions=False, **kwargs)
+                                  dangerously_skip_permissions=False,
+                                  cli_major_version=1, **kwargs)
 
 
 
@@ -92,12 +93,29 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn("--dangerously-skip-permissions", command)
         self.assertEqual(command[-1], "do the task")
 
+    def test_run_command_tracks_opencode_v2_flag_surface(self):
+        # opencode 2.x dropped --dir and --dangerously-skip-permissions, loads
+        # no config-defined agents, and needs a private server plus --auto.
+        agent2 = agent.IsolatedOpenCode(model=agent.MODEL, agent_name='portforge-worker',
+                                        web=True, repository=Path('/workspace/original-repository'),
+                                        dangerously_skip_permissions=False,
+                                        cli_major_version=2, work_dir='/tmp/work')
+        command = agent2._build_run_cmd("do the task")
+        self.assertEqual(command[:2], ["opencode", "run"])
+        self.assertIn("--standalone", command)
+        self.assertIn("--auto", command)
+        self.assertNotIn("--agent", command)
+        self.assertNotIn("--dir", command)
+        self.assertNotIn("--dangerously-skip-permissions", command)
+        self.assertEqual(command[-1], "do the task")
+        self.assertEqual(agent2._build_run_cmd.__name__, "_build_run_cmd")
+
     def test_error_categories_map_typed_provider_failures(self):
         reset = datetime.now(timezone.utc)
-        typed = [(RateLimitError("node", reset, "slow down"), "capacity"),
-                 (AuthenticationError("node"), "authentication"),
-                 (BillingError("node"), "authentication"),
-                 (InvalidRequestError("node"), "provider_error")]
+        typed = [(RateLimitError(reset, "slow down"), "capacity"),
+                 (AuthenticationError(), "authentication"),
+                 (BillingError(), "authentication"),
+                 (InvalidRequestError(), "provider_error")]
         for exc, category in typed:
             with self.subTest(category=category):
                 self.assertEqual(agent.error_kind(exc), category)
@@ -110,7 +128,7 @@ class AgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with patch.object(agent, "IsolatedOpenCode") as provider:
                 provider.return_value.prompt.side_effect = RateLimitError(
-                    "node", datetime.now(timezone.utc), "Secret provider context omitted")
+                    datetime.now(timezone.utc), "Secret provider context omitted")
                 record = agent.query(root, root, "worker", 1, "task", [], True, 600)
             self.assertFalse(record["success"])
             self.assertEqual(record["error"], "capacity")
@@ -144,7 +162,7 @@ class AgentTests(unittest.TestCase):
                 captured.update(files=list(Path(workspace).iterdir()), tools=tools, web=web, timeout=timeout)
                 return {"turn": turn, "success": True, "response": "not json", "error": "", "model": agent.MODEL}
             with patch.object(agent, "query", side_effect=query):
-                result = agent.supervisor_node._chia_original(root, root, 3, {"pending_jobs": 1})
+                result = agent.supervisor_node._original(root, root, 3, {"pending_jobs": 1})
             self.assertEqual(captured, {"files": [], "tools": [], "web": False,
                                         "timeout": agent.SUPERVISOR_TIMEOUT_SECONDS})
             self.assertEqual(result["decision"]["action"], "pause")
@@ -172,7 +190,7 @@ class AgentTests(unittest.TestCase):
                     self.assertTrue(prompt.endswith(agent.SUPERVISOR_OUTPUT))
                 return {"turn": turn, "success": True, "response": responses.pop(0), "error": "", "model": agent.MODEL}
             with patch.object(agent, "query", side_effect=query) as mocked:
-                result = agent.supervisor_node._chia_original(root, root, 3, {"pending_jobs": 12})
+                result = agent.supervisor_node._original(root, root, 3, {"pending_jobs": 12})
             self.assertEqual(mocked.call_count, 2)
             self.assertEqual([c.args[2] for c in mocked.call_args_list], ["supervisor", "supervisor-repair-1"])
             self.assertEqual(result["decision"], repaired)
@@ -185,7 +203,7 @@ class AgentTests(unittest.TestCase):
                    json.dumps({"action": "continue", "instruction": "x" * 2001})]
         with tempfile.TemporaryDirectory() as root, patch.object(agent, "query") as mocked:
             mocked.side_effect = [{"turn": 1, "success": True, "response": text, "error": ""} for text in replies]
-            result = agent.supervisor_node._chia_original(root, root, 1, {})
+            result = agent.supervisor_node._original(root, root, 1, {})
             self.assertEqual(mocked.call_count, 3)
             self.assertFalse(result["success"])
             self.assertEqual(result["decision"]["action"], "pause")
@@ -201,7 +219,7 @@ class AgentTests(unittest.TestCase):
                 with patch.object(agent, "query") as mocked:
                     mocked.side_effect = [{"turn": 1, "success": True, "response": text, "error": ""}
                                           for text in replies]
-                    result = agent.supervisor_node._chia_original(root, root, 1, {})
+                    result = agent.supervisor_node._original(root, root, 1, {})
                 self.assertEqual(mocked.call_count, len(replies))
                 self.assertTrue(result["success"])
                 self.assertEqual(result["decision"], pause)
@@ -213,7 +231,7 @@ class AgentTests(unittest.TestCase):
                     replies = ([{"turn": 1, "success": True, "response": "bad", "error": ""}] if repair else [])
                     replies += [{"turn": 1, "success": False, "response": "incomplete", "error": kind}]
                     with patch.object(agent, "query", side_effect=replies) as mocked:
-                        result = agent.supervisor_node._chia_original(root, root, 1, {})
+                        result = agent.supervisor_node._original(root, root, 1, {})
                     self.assertEqual(mocked.call_count, len(replies))
                     self.assertEqual(result["error"], kind)
                     self.assertFalse(result["success"])
@@ -240,7 +258,7 @@ class AgentTests(unittest.TestCase):
     def test_custom_phase_instructions_cannot_erase_final_short_protocol(self):
         # Match phase_agent's instruction-assignment replacement, but execute
         # only this function so the test never imports a frozen campaign.
-        tree = ast.parse(inspect.getsource(agent.supervisor_node._chia_original))
+        tree = ast.parse(inspect.getsource(agent.supervisor_node._original))
         node = tree.body[0]
         node.decorator_list = []
         node.body[0] = ast.parse('instructions = "CUSTOM PHASE: qualify all twelve gates.\\n"').body[0]
@@ -273,7 +291,7 @@ class AgentTests(unittest.TestCase):
         replies = [json.dumps({'action': 'continue', 'instruction': 'x' * n}) for n in lengths]
         with tempfile.TemporaryDirectory() as root, patch.object(agent, "query") as mocked:
             mocked.side_effect = [{"turn": 1, "success": True, "response": text, "error": ""} for text in replies]
-            result = agent.supervisor_node._chia_original(root, root, 1, {})
+            result = agent.supervisor_node._original(root, root, 1, {})
             self.assertEqual(mocked.call_count, 3)
             self.assertFalse(result["success"])
             self.assertEqual(result["decision"]["action"], "pause")
@@ -284,7 +302,7 @@ class AgentTests(unittest.TestCase):
     def test_worker_handoff_has_bounded_timeout_and_state_instruction(self):
         with tempfile.TemporaryDirectory() as root, patch.object(agent, "query") as query:
             query.return_value = {"turn": 2, "success": True, "response": "saved", "error": ""}
-            agent.worker_node._chia_original(root, root, ["scoped-tool"], 2, "resume")
+            agent.worker_node._original(root, root, ["scoped-tool"], 2, "resume")
             arguments = query.call_args.args
             self.assertIn("STATE.md", arguments[4])
             self.assertTrue(arguments[4].endswith(agent.WORKER_HANDOFF))
@@ -302,7 +320,7 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn("{repo_id}", body)
 
     def test_phase_worker_retains_compact_batched_handoff_and_scoped_tools(self):
-        tree = ast.parse(inspect.getsource(agent.worker_node._chia_original))
+        tree = ast.parse(inspect.getsource(agent.worker_node._original))
         node = tree.body[0]
         node.decorator_list = []
         node.body[0] = ast.parse('instructions = "CUSTOM PHASE: complete frozen gates.\\n"').body[0]
@@ -357,7 +375,13 @@ class ClaudeBackendTests(unittest.TestCase):
         with patch.dict(os.environ, {'PORTFORGE_SUPERVISOR_BACKEND': 'claude',
                                      'PORTFORGE_SUPERVISOR_MODEL': 'claude-small'}, clear=True):
             self.assertEqual(agent.role_selection('supervisor'), ('claude', 'claude-small'))
-        with patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'codex'}, clear=True), \
+        with patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'codex'}, clear=True):
+            # codex defaults to no model: the CLI uses its configured default.
+            self.assertEqual(agent.role_selection('worker'), ('codex', None))
+        with patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'codex',
+                                     'PORTFORGE_WORKER_MODEL': 'gpt-6-astra'}, clear=True):
+            self.assertEqual(agent.role_selection('worker'), ('codex', 'gpt-6-astra'))
+        with patch.dict(os.environ, {'PORTFORGE_WORKER_BACKEND': 'unknown-cli'}, clear=True), \
              self.assertRaises(ValueError):
             agent.role_selection('worker')
 
@@ -432,7 +456,75 @@ class ClaudeBackendTests(unittest.TestCase):
         self.assertEqual((record['success'], record['error'], record['response']), (False, 'capacity', ''))
         expected = agent.claude_errors.parse_rate_limit_reset("You've hit your limit · resets 5pm (UTC)")
         self.assertAlmostEqual(record['retry_after'], expected.timestamp(), delta=5)
-        self.assertEqual(agent.error_kind(agent.claude_errors.AuthenticationError('node')), 'authentication')
+        self.assertEqual(agent.error_kind(agent.claude_errors.AuthenticationError()), 'authentication')
+
+
+class CodexBackendTests(unittest.TestCase):
+    def setUp(self):
+        self.environment = patch.dict(os.environ, {'PORTFORGE_REPOSITORY_ROOT': '/workspace/original-repository'})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def make_codex(self, web=True, repository='/workspace/original-repository', model='gpt-test', **kwargs):
+        return agent.IsolatedCodex(model=model, web=web,
+                                   repository=Path(repository), **kwargs)
+
+    def test_codex_command_is_scoped_readonly_and_uses_mcp_overrides(self):
+        with tempfile.TemporaryDirectory() as root, \
+             patch.object(agent.codex_backend.subprocess, 'run') as run:
+            run.return_value = SimpleNamespace(returncode=0, stderr='')
+            llm = self.make_codex(web=True, work_dir=root, timeout_seconds=60,
+                                  retries=1, log_dir=root + '/logs')
+            llm.prompt('task', [FakeMCPTool()])
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ['codex', 'exec', '--json'])
+        self.assertIn('--skip-git-repo-check', command)
+        self.assertIn('--ignore-rules', command)
+        self.assertEqual(command[command.index('-s') + 1], 'read-only')
+        self.assertIn('--ignore-user-config', command)  # isolation when a model is named
+        self.assertEqual(command[command.index('-m') + 1], 'gpt-test')
+        self.assertEqual(command[command.index('-C') + 1], root)
+        self.assertIn('tools.web_search=true', command)
+        self.assertIn(f'mcp_servers.parakeet_tools.url="http://127.0.0.1:8000/parakeet_tools/mcp"', command)
+        self.assertEqual(command[-1], '-')  # prompt arrives on stdin
+
+    def test_codex_supervisor_variant_disables_web_and_default_model(self):
+        with tempfile.TemporaryDirectory() as root:
+            command = self.make_codex(web=False, model=None, work_dir=root)._build_cmd(
+                'task', [], '/tmp/last.txt')
+        self.assertIn('tools.web_search=false', command)
+        self.assertNotIn('-m', command)
+        self.assertNotIn('--ignore-user-config', command)  # user config carries the default model
+
+    def test_codex_resumes_a_recorded_session(self):
+        with tempfile.TemporaryDirectory() as root:
+            llm = self.make_codex(work_dir=root)
+            events = ''.join(json.dumps(event) + '\n' for event in (
+                {'type': 'thread.started', 'thread_id': '0199abcd-1234-5678-9abc-def012345678'},
+                {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'done'}}))
+            self.assertEqual(agent.codex_backend.parse_session_id(events),
+                             '0199abcd-1234-5678-9abc-def012345678')
+            self.assertEqual(agent.codex_backend.parse_session_id(
+                json.dumps({'type': 'session_configured', 'payload': {'session_id': 'ses-old'}})),
+                'ses-old')
+            llm.session_id = '0199abcd-1234-5678-9abc-def012345678'
+            llm.resume_session = True
+            command = llm._build_cmd('next', [], '/tmp/last.txt')
+            # Global options precede the resume subcommand (-s/-C are exec-only).
+            self.assertLess(command.index('-s'), command.index('resume'))
+            self.assertEqual(command[command.index('resume') + 1], '0199abcd-1234-5678-9abc-def012345678')
+            self.assertEqual(command[-1], '-')
+
+    def test_codex_error_events_are_classified(self):
+        events = ''.join(json.dumps(event) + '\n' for event in (
+            {'type': 'thread.started', 'thread_id': 'x'},
+            {'type': 'turn.failed', 'error': {'message': 'usage limit reached for gpt-test'}}))
+        with self.assertRaises(agent.RateLimitError):
+            agent.codex_backend.classify_text(' '.join(agent.codex_backend.parse_error_events(events)), 1)
+        with self.assertRaises(agent.AuthenticationError):
+            agent.codex_backend.classify_text('Your access token could not be refreshed. Please log in.', 1)
+        with self.assertRaises(agent.InvalidRequestError):
+            agent.codex_backend.classify_text('Model not found: nope', 1)
 
 
 if __name__ == "__main__":

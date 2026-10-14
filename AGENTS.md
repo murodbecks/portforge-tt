@@ -22,7 +22,7 @@ the envelope (batch sizes, input lengths, output lengths, languages or modes).
   the weight files and their SHA-256 and byte sizes (from the Hugging Face LFS
   API, not from memory), and the `config.json` fields the port relies on under
   `architecture`.
-- Check it: `python models.py <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
+- Check it: `python -m portforge_tt.models <key> /tmp/ckpt --download --registry ports/<name>/models.json`.
 
 ## 2. Choose the benchmark with the user
 
@@ -35,7 +35,7 @@ lengths, masking).
   `smoke` (1 case), `bringup` (about 8) and `full` (held out).
 - Record provenance, licenses, generators and seeds in `BENCHMARK.md`.
 - Compute its identity and pin it in both `port.json` and `evaluate.py`:
-  `python -c "import json, cluster; print(cluster.identity(json.load(open('ports/<name>/corpus.json'))))"`.
+  `python -c "import json; from portforge_tt.cluster import identity; print(identity(json.load(open('ports/<name>/corpus.json'))))"`.
 - Keep `full` cases out of development; agents never see them.
 
 **Ask**: the gates. Earlier packs use max-row NRMSE ≤ 0.04 against the FP32 oracle,
@@ -67,7 +67,7 @@ Add `ports/<name>/tests/test_evaluate.py` (see an existing pack) and run it with
 - `port.json`: title, task, delivery models, precisions, corpus hash, and the
   reference host's packages and import checks.
 
-Run `PYTHONPATH=.:../..:tests python -m unittest tests.test_ports`: it loads
+Run `python -m pytest tests/test_ports.py -q`: it loads
 every pack and checks hashes, suites, tool names and site-specific leaks.
 
 ## 5. Set up the machines with the user
@@ -77,7 +77,7 @@ keys, and which cards the campaign may lease.
 
 - TT host: a built TT-Metal checkout, its commit, a Python environment with
   `ttnn`, `torch`, `numpy`, `pytest`, `bwrap`, and the checkpoint downloaded with
-  `models.py --download`. List the cards with `ls /dev/tenstorrent` or `tt-smi`.
+  `python -m portforge_tt.models --download`. List the cards with `ls /dev/tenstorrent` or `tt-smi`.
 - Reference host: copy `port.json` and run `bash setup_reference.sh port.json`.
 - Fill a copy of `cluster.yaml`; keep it out of version control.
 - Reference smoke on the reference host, once, before any campaign:
@@ -86,11 +86,11 @@ keys, and which cards the campaign may lease.
 
 ## 6. Launch and supervise
 
-**Ask**: the agent backend (`--agent opencode` or `claude`), budget hours, and
+**Ask**: the agent backend (`--agent opencode`, `claude` or `codex`), budget hours, and
 whether to watch the run together.
 
 ```sh
-python portforge_loop.py --port ports/<name> --cluster my-cluster.yaml --hours 6 --detach
+portforge --port ports/<name> --cluster my-cluster.yaml --hours 6 --detach
 ```
 
 While it runs, read `runs/<run>/status.json` and the turn files. To steer the

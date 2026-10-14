@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 PACK = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(PACK), str(PACK.parents[1])]
+sys.path[:0] = [str(PACK), str(PACK.parents[1] / "portforge_tt")]
 import models  # noqa: E402
 
 models.use_registry(PACK / "models.json")

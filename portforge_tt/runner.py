@@ -20,7 +20,11 @@ import stat
 import subprocess
 import sys
 import time
-from models import model_spec
+
+if __package__:  # installed as part of the portforge_tt package
+    from .models import model_spec
+else:  # flat: runs as harness/runner.py on the TT host
+    from models import model_spec
 
 METAL = PYTHON = HEALTH = LEASES = None
 MOUNTS, CARD_ALLOWLIST = (), ()

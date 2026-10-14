@@ -42,7 +42,7 @@ never a substitute for full-model correctness.
    compatibility; provide a standalone text translation CLI with explicit checkpoint,
    source/target languages, device and generation cap. Tests must import actual
    code and accept configurable fixtures rather than execute Markdown or require
-   CHIA's `/input` and `/weights`. Keep one configuration-driven backend.
+   the sandbox's `/input` and `/weights`. Keep one configuration-driven backend.
    After a bounded optimization experiment, test that shared source on all three
    sizes: smoke first, then bringup for passing cells, with explicit `model` and
    `precision` arguments. Cover BF16 and investigate BFP8_B separately. Fix actual

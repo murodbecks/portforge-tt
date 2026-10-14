@@ -86,7 +86,7 @@ excludes weight loading.
 A tt-metal model package for an upstream PR under
 `models/experimental/<model>`: `tt/` (TTNN implementation), `demo/` (CLI),
 `reference/` (FP32 reference utilities), `tests/` (pytest, importable without
-CHIA mounts), `benchmarks/`, `docs/`, and a README with model-card links,
+sandbox mounts), `benchmarks/`, `docs/`, and a README with model-card links,
 measured evidence and limitations. SPDX headers on source files; only
 Apache-2.0-compatible code. The worker prepares branch, commit message and PR
 body; the operator reviews, signs and submits.

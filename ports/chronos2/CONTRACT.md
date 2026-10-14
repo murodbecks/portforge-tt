@@ -114,7 +114,7 @@ for an upstream PR to `tenstorrent/tt-metal` under `models/experimental/chronos2
 time-series bring-ups): `tt/` (TTNN implementation), `demo/` (standalone
 forecast CLI: CSV in → quantile CSV out, with explicit checkpoint/device/
 precision arguments), `reference/` (FP32 torch reference utilities),
-`tests/` (pytest, importable without CHIA mounts, configurable fixtures),
+`tests/` (pytest, importable without sandbox mounts, configurable fixtures),
 `benchmarks/` (reproducible measurement scripts), `docs/`, top-level README with
 model card links, measured evidence and limitations; SPDX headers on source
 files; no vendored third-party code without license attribution (Apache-2.0

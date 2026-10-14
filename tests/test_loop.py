@@ -329,7 +329,7 @@ class LoopTests(unittest.TestCase):
 
     def test_run_punctuation_cannot_create_nested_mcp_config_keys(self):
         from types import SimpleNamespace
-        from agent import IsolatedOpenCode
+        from agents.agent import IsolatedOpenCode
         name = loop.tool_name(self.tools.run_dir / 'model-parakeet with spaces')
         self.assertRegex(name, r'^portforge_[a-f0-9]{16}$')
         tool = SimpleNamespace(name=name, hostname='127.0.0.1', port=8002)
@@ -676,7 +676,7 @@ class LoopTests(unittest.TestCase):
     def test_pending_or_passing_identical_stage_reuses_job(self):
         for result in (None, {'verdict': {'passed': True}}):
             self.archive('smoke', result)
-            with patch.object(loop.experiment, 'chia_remote') as remote:
+            with patch.object(loop.experiment, 'submit') as remote:
                 self.assertEqual(self.tools.evaluate('smoke'), {'job': 'one', 'reused': True})
                 remote.assert_not_called()
 
@@ -701,7 +701,7 @@ class LoopTests(unittest.TestCase):
 
     def test_changed_precision_or_cluster_gets_new_job_with_pinned_config(self):
         self.archive('smoke', {'verdict': {'passed': True}})
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             result = self.tools.evaluate('smoke', 'fp32')
             self.assertNotEqual(result['job'], 'one')
             self.assertEqual(remote.call_args.args[-1], self.config)
@@ -710,7 +710,7 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(request['cluster_sha256'], loop.digest(self.config))
         replacement = {**self.config, 'tt': {'host': '192.0.2.3'}}
         write_json(self.tools.run_dir / 'cluster.json', replacement)
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             result = self.tools.evaluate('smoke')
             self.assertNotEqual(result['job'], 'one')
             self.assertEqual(remote.call_args.args[-1], replacement)
@@ -769,7 +769,7 @@ class LoopTests(unittest.TestCase):
         self.archive('bringup', {'verdict': {'passed': True}}, precision='bf16')
         with self.assertRaises(ValueError):
             self.tools.submit(precision='bfp8_b')
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             result = self.tools.evaluate('bringup', precision='bfp8_b')
         self.assertNotEqual(result['job'], 'one')
         self.assertEqual(remote.call_args.args[2]['precision'], 'bfp8_b')
@@ -987,7 +987,7 @@ class LoopTests(unittest.TestCase):
 
     def test_campaign_default_model_reaches_run_and_evaluate(self):
         self.tools.model = 'parakeet'
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             self.tools.run('python probe.py')
             self.assertEqual(remote.call_args.args[2]['model'], 'parakeet')
             self.tools.evaluate()
@@ -997,7 +997,7 @@ class LoopTests(unittest.TestCase):
 
     def test_explicit_profile_model_selects_checkpoint_and_its_public_suite(self):
         self.tools.model = 'parakeet'
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             for model in ('parakeet', 'parakeet'):
                 with self.subTest(model=model):
                     job = self.tools.run('python profile.py', public_input_stage='bringup', model=model)
@@ -1013,7 +1013,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.tools.model, 'parakeet')
 
     def test_invalid_profile_model_is_rejected_before_submission(self):
-        with patch.object(loop.experiment, 'chia_remote') as remote:
+        with patch.object(loop.experiment, 'submit') as remote:
             with self.assertRaisesRegex(ValueError, 'Unknown model'):
                 self.tools.run('python profile.py', model='unregistered-model')
         remote.assert_not_called()
@@ -1023,9 +1023,9 @@ class LoopTests(unittest.TestCase):
         request = {'kind': 'run', 'command': 'python profile.py',
                    'public_input_stage': 'smoke', 'model': 'parakeet'}
         with patch.object(loop, 'cached_reference', return_value={'tt_dir': '/prepared/parakeet/smoke'}) as cached, \
-             patch.object(loop.reference, 'chia_remote') as gpu, \
+             patch.object(loop.reference, 'submit') as gpu, \
              patch.object(loop, 'remote', return_value={'returncode': 0}) as tt, patch.object(loop, 'ssh') as ssh:
-            result = loop.experiment._chia_original(str(self.tools.run_dir), 'profile-large', request, self.config)
+            result = loop.experiment._original(str(self.tools.run_dir), 'profile-large', request, self.config)
         cached.assert_called_once_with(str(self.tools.run_dir), 'smoke', self.config, 'parakeet')
         self.assertEqual(tt.call_args.args[2]['model'], 'parakeet')
         self.assertEqual(tt.call_args.args[2]['public_input_stage'], 'smoke')
@@ -1098,7 +1098,7 @@ class LoopTests(unittest.TestCase):
         for stage in ('smoke', 'bringup'):
             with patch.object(loop, 'upload'), patch.object(loop, 'reference_job') as job, \
                  patch.object(loop, 'ssh', return_value=b'archive'):
-                result = loop.reference._chia_original(str(run), stage, config, 'parakeet')
+                result = loop.reference._original(str(run), stage, config, 'parakeet')
             self.assertIn('/parakeet/' + stage, result['reference_dir'])
             self.assertTrue(result['tt_dir'].endswith('/parakeet/' + stage))
             self.assertIn('--model parakeet', job.call_args.args[2])
@@ -1115,9 +1115,9 @@ class LoopTests(unittest.TestCase):
         write_json(cache / (loop.digest(config['tt']) + '.deployed.json'), {'tt_dir': expected['tt_dir']})
         (cache / 'reference.tar').write_bytes(b'archive')
         request = {'kind': 'evaluate', 'stage': 'smoke', 'model': 'parakeet'}
-        with patch.object(loop.reference, 'chia_remote') as reference, \
+        with patch.object(loop.reference, 'submit') as reference, \
              patch.object(loop, 'remote', return_value={'returncode': 1}):
-            loop.experiment._chia_original(str(run), 'test', request, config)
+            loop.experiment._original(str(run), 'test', request, config)
             reference.assert_not_called()
         for altered in ({**expected, 'model': 'other-model'}, {**expected, 'stage': 'full'},
                         {**expected, 'endpoint_sha256': 'wrong'}):
@@ -1125,10 +1125,10 @@ class LoopTests(unittest.TestCase):
             self.assertIsNone(loop.cached_reference(run, 'smoke', config, 'parakeet'))
         write_json(cache / 'ready.json', expected)
         (cache / 'reference.tar').unlink()
-        with patch.object(loop.reference, 'chia_remote', return_value='future') as reference, \
+        with patch.object(loop.reference, 'submit', return_value=support.future('future')) as reference, \
              patch.object(loop, 'get', return_value=expected), \
              patch.object(loop, 'remote', return_value={'returncode': 1}):
-            loop.experiment._chia_original(str(run), 'miss', request, config)
+            loop.experiment._original(str(run), 'miss', request, config)
             reference.assert_called_once_with(str(run), 'smoke', config, 'parakeet')
 
     def test_supervisor_tracks_distinct_candidate_outcomes_and_baseline_evidence(self):
@@ -1272,7 +1272,7 @@ class LoopTests(unittest.TestCase):
 
     def test_profile_run_requests_public_inputs_without_evaluation_dedup(self):
         self.archive('bringup', {'verdict': {'passed': True}})
-        with patch.object(loop.experiment, 'chia_remote', return_value='future') as remote:
+        with patch.object(loop.experiment, 'submit', return_value=support.future('future')) as remote:
             first = self.tools.run('python profile.py', public_input_stage='bringup')
             second = self.tools.run('python profile.py', public_input_stage='bringup')
         self.assertNotEqual(first['job'], second['job'])
@@ -1290,19 +1290,19 @@ class LoopTests(unittest.TestCase):
     def test_profile_run_resolves_cached_reference_without_assessment_or_gpu_queue(self):
         request = {'kind': 'run', 'command': 'python profile.py', 'public_input_stage': 'smoke'}
         with patch.object(loop, 'cached_reference', return_value={'tt_dir': '/prepared'}) as cached, \
-             patch.object(loop.reference, 'chia_remote') as gpu, \
+             patch.object(loop.reference, 'submit') as gpu, \
              patch.object(loop, 'remote', return_value={'returncode': 0}) as tt, patch.object(loop, 'ssh') as ssh:
-            result = loop.experiment._chia_original(str(self.tools.run_dir), 'profile', request, self.config)
+            result = loop.experiment._original(str(self.tools.run_dir), 'profile', request, self.config)
         cached.assert_called_once_with(str(self.tools.run_dir), 'smoke', self.config, 'parakeet')
         gpu.assert_not_called()
         ssh.assert_not_called()
         self.assertNotIn('verdict', result)
         self.assertEqual(tt.call_args.args[2]['public_input_stage'], 'smoke')
         with patch.object(loop, 'cached_reference', return_value=None), \
-             patch.object(loop.reference, 'chia_remote', return_value='future') as gpu, \
+             patch.object(loop.reference, 'submit', return_value=support.future('future')) as gpu, \
              patch.object(loop, 'get', return_value={'tt_dir': '/prepared'}), \
              patch.object(loop, 'remote', return_value={'returncode': 0}):
-            loop.experiment._chia_original(str(self.tools.run_dir), 'uncached', request, self.config)
+            loop.experiment._original(str(self.tools.run_dir), 'uncached', request, self.config)
         gpu.assert_called_once_with(str(self.tools.run_dir), 'smoke', self.config, 'parakeet')
 
     def test_full_transport_outlives_configured_job_without_extending_other_calls(self):
@@ -1313,12 +1313,12 @@ class LoopTests(unittest.TestCase):
             request = {'kind': kind, 'stage': stage, 'full_timeout_seconds': 999999}
             with patch.object(loop, 'cached_reference', return_value={'tt_dir': '/prepared'}), \
                  patch.object(loop, 'remote', return_value={'returncode': 1}) as remote:
-                loop.experiment._chia_original(str(self.tools.run_dir), kind + str(stage), request, config)
+                loop.experiment._original(str(self.tools.run_dir), kind + str(stage), request, config)
             self.assertEqual(remote.call_args.kwargs['timeout'], expected)
         config['tt']['full_timeout_seconds'] = 86401
         with patch.object(loop, 'cached_reference', return_value={'tt_dir': '/prepared'}), \
              patch.object(loop, 'remote') as remote:
-            result = loop.experiment._chia_original(str(self.tools.run_dir), 'invalid-deadline',
+            result = loop.experiment._original(str(self.tools.run_dir), 'invalid-deadline',
                                                    {'kind': 'evaluate', 'stage': 'full'}, config)
         remote.assert_not_called()
         self.assertEqual(result['failure'], 'infrastructure')

@@ -1,4 +1,4 @@
-"""Native CHIA inventory, explicit SSH transport and durable job identity."""
+"""Inventory parsing, explicit SSH transport and durable job identity."""
 import support  # noqa: F401  (pack and registry setup)
 import copy
 import json

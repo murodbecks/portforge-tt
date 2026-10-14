@@ -1,3 +1,6 @@
+# agents
+.opencode
+
 # Python
 __pycache__/
 *.py[cod]

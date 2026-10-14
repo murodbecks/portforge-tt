@@ -1,9 +1,18 @@
-"""Two bounded agent roles in the CHIA graph; only the worker gets tools.
+"""Two bounded agent roles; only the worker gets tools.
 
 Each role runs on a selectable CLI backend: opencode (z.ai coding plan, the
-default) or Claude Code (the local ``claude`` login). Auto-approval is
-structural for both: the permission config allows the scoped MCP tools while
-denying host edit/exec, so an unattended run never blocks on an approval prompt.
+default), Claude Code (the local ``claude`` login) or Codex (the local
+``codex`` login). Auto-approval is structural for all three: the permission
+configuration allows the scoped MCP tools while denying host edit/exec, so an
+unattended run never blocks on an approval prompt.
+
+Campaign continuation (``--resume``) works with any backend combination: the
+workspace, STATE.md and read-only job history are carried into the new run,
+and the resumed agents may even differ from the ones that started the
+campaign. Per-turn session continuation is also implemented per backend
+(``resume_session=True``), but roles default to a fresh session each turn:
+campaign state lives in the workspace and turn files, not in a hidden chat
+memory, which keeps every turn auditable.
 """
 import json
 import os
@@ -11,24 +20,33 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from port import load_port
+if __package__ and "." in __package__:  # installed inside portforge_tt
+    from ..runtime import job
+    from ..port import load_port
+else:  # frozen flat harness: this package sits at the top level
+    from runtime import job
+    from port import load_port
+from . import claude as claude_errors
+from . import codex as codex_backend
+from .errors import (RateLimitError, AuthenticationError, BillingError,
+                     InvalidRequestError)
+from .opencode import OpenCodeLLM
+from .claude import ClaudeCodeLLM, ClaudeCodeQueryResult
+from .codex import CodexLLM
 
-from chia.base.ChiaFunction import ChiaFunction
-from chia.models.claude import ClaudeCodeLLM, ClaudeCodeQueryResult
-from chia.models import claude as claude_errors
-from chia.models.opencode import (OpenCodeLLM, RateLimitError, AuthenticationError,
-                                  BillingError, InvalidRequestError)
-
-ROOT = Path(__file__).resolve().parent  # standalone repo root
-BACKENDS = ("opencode", "claude")
-DEFAULT_MODELS = {"opencode": "zai-coding-plan/glm-5.3", "claude": "claude-opus-5-5"}
+ROOT = Path(__file__).resolve().parents[2]  # standalone repo root
+BACKENDS = ("opencode", "claude", "codex")
+# codex defaults to None: the CLI then uses the model configured in the local
+# codex install (set explicitly with --agent-model to pin one).
+DEFAULT_MODELS = {"opencode": "zai-coding-plan/glm-5.3", "claude": "claude-opus-5-5",
+                  "codex": None}
 # Legacy default; role selection below is resolved per call from the environment.
 MODEL = os.environ.get("PORTFORGE_AGENT_MODEL", DEFAULT_MODELS["opencode"])
 # Strong-suggestion checkpoint target lives in the prompts; these are the hard
 # runtime caps (worker may overrun the 8-minute target for high-promise work).
 WORKER_TIMEOUT_SECONDS = int(os.environ.get("PORTFORGE_WORKER_TIMEOUT_SECONDS", "1800"))
 SUPERVISOR_TIMEOUT_SECONDS = int(os.environ.get("PORTFORGE_SUPERVISOR_TIMEOUT_SECONDS", "300"))
-PROMPTS = Path(__file__).with_name("prompts")
+PROMPTS = Path(__file__).resolve().parents[1] / "prompts"
 
 
 def read_prompt(name, port=None):
@@ -67,7 +85,7 @@ def repository_root():
 
 
 class IsolatedOpenCode(OpenCodeLLM):
-    """Scoped opencode agent: reads the workspace, acts only through Chia MCP tools.
+    """Scoped opencode agent: reads the workspace, acts only through MCP tools.
 
     Auto-approval is achieved by configuration, not by skipping checks: every
     native mutation/exec path is denied outright, so there is nothing left that
@@ -75,6 +93,7 @@ class IsolatedOpenCode(OpenCodeLLM):
     Host secrets (SSH keys, opencode credentials, the controller repository)
     are outside the agent's readable world.
     """
+
     def __init__(self, *, web, repository, **kwargs):
         self.web = web
         self.repository = Path(repository)
@@ -106,10 +125,11 @@ class IsolatedClaude(ClaudeCodeLLM):
     Built-in tools are limited to read/search (plus web research for the
     worker); ``--restricted`` confines file tools to the workspace and ignores
     user/project settings (so plugins), skills and hooks are disabled, auto-memory
-    is off, and ``--strict-mcp-config`` exposes only the Chia MCP tools. In
+    is off, and ``--strict-mcp-config`` exposes only the PortForge MCP tools. In
     ``dontAsk`` mode anything not pre-approved is denied instead of prompting.
     (``--safe-mode`` is not used: it also disables the MCP servers.)
     """
+
     def __init__(self, *, work_dir, web, repository, **kwargs):
         self.work_dir = str(work_dir)
         self.web = web
@@ -123,7 +143,8 @@ class IsolatedClaude(ClaudeCodeLLM):
         home = Path.home()
         denied = ["Bash", "Edit", "Write", "NotebookEdit", "Task", "Agent"] + [
             f"Read(/{path}/**)" for path in (home / ".ssh", home / ".claude", home / ".config/opencode",
-                                             home / ".local/share/opencode", self.repository)]
+                                             home / ".local/share/opencode", home / ".codex",
+                                             self.repository)]
         settings = {"permissions": {"defaultMode": "dontAsk", "allow": list(builtin), "deny": denied},
                     "disableAllHooks": True}
         return ["--restricted", "--strict-mcp-config", "--no-session-persistence",
@@ -174,6 +195,20 @@ class IsolatedClaude(ClaudeCodeLLM):
         return final if final is not None else "".join(parts)
 
 
+class IsolatedCodex(CodexLLM):
+    """Scoped Codex agent with the same reach as :class:`IsolatedOpenCode`.
+
+    The read-only sandbox already rejects every model-generated write and
+    network access, so the only mutation path is the ``port_write`` MCP tool.
+    Host execpolicy rules and (when a model is named) the user config are
+    ignored; web search is a client-side tool gated on the ``web`` flag.
+    """
+
+    def __init__(self, *, web, repository, **kwargs):
+        self.repository = Path(repository)
+        super().__init__(web=web, sandbox="read-only", **kwargs)
+
+
 def role_selection(role):
     """Backend and model for a role, from the controller's recorded selection."""
     key = "SUPERVISOR" if role.startswith("supervisor") else "WORKER"
@@ -187,12 +222,11 @@ def role_selection(role):
 
 def error_kind(value):
     """Normalize provider failures without echoing CLI internals to another agent."""
-    if isinstance(value, (RateLimitError, claude_errors.RateLimitError)):
+    if isinstance(value, RateLimitError):
         return "capacity"
-    if isinstance(value, (AuthenticationError, BillingError,
-                          claude_errors.AuthenticationError, claude_errors.BillingError)):
+    if isinstance(value, (AuthenticationError, BillingError)):
         return "authentication"
-    if isinstance(value, (InvalidRequestError, claude_errors.InvalidRequestError)):
+    if isinstance(value, InvalidRequestError):
         return "provider_error"
     text = str(getattr(value, "stderr", "") or value).lower()
     if "timeout" in text or "timed out" in text:
@@ -235,6 +269,10 @@ def query(workspace, run_dir, role, turn, prompt, tools, web, timeout):
         agent = IsolatedClaude(model=model, work_dir=workspace, timeout_seconds=timeout,
             retries=1, logging_name="portforge-" + role, log_dir=str(logs), web=web,
             repository=repository_root())
+    elif backend == "codex":
+        agent = IsolatedCodex(model=model, timeout_seconds=timeout, retries=1,
+            logging_name="portforge-" + role, log_dir=str(logs), web=web,
+            repository=repository_root(), work_dir=str(workspace))
     else:
         agent = IsolatedOpenCode(model=model, agent_name=agent_name(role),
             work_dir=str(workspace), timeout_seconds=timeout, retries=1,
@@ -242,7 +280,7 @@ def query(workspace, run_dir, role, turn, prompt, tools, web, timeout):
             repository=repository_root(), dangerously_skip_permissions=False)
     # External skills from the host account must not leak into the scoped
     # agent; project config is already disabled by the backend itself. The
-    # backend copies os.environ into the opencode subprocess, so scope these
+    # opencode backend copies os.environ into the subprocess, so scope these
     # to exactly the prompt call and restore afterwards.
     isolation = {"OPENCODE_DISABLE_PROJECT_CONFIG": "1",
                  "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
@@ -251,9 +289,7 @@ def query(workspace, run_dir, role, turn, prompt, tools, web, timeout):
     os.environ.update(isolation)
     try:
         result = agent.prompt(prompt, tools=tools)
-    except (RateLimitError, AuthenticationError, BillingError, InvalidRequestError,
-            claude_errors.RateLimitError, claude_errors.AuthenticationError,
-            claude_errors.BillingError, claude_errors.InvalidRequestError) as exc:
+    except (RateLimitError, AuthenticationError, BillingError, InvalidRequestError) as exc:
         result = None
         record = {"turn": turn, "success": False, "response": "", "error": error_kind(exc)}
         reset = getattr(exc, "reset_time", None)
@@ -292,7 +328,7 @@ def save(run_dir, role, turn, record):
     return record
 
 
-@ChiaFunction(resources={"opencode_creds": 1}, max_retries=0)
+@job(resources={"agent_creds": 1})
 def worker_node(workspace, run_dir, tools, turn, prompt):
     instructions = read_prompt("worker", campaign_port(run_dir)) + "\n\n"
     return save(run_dir, "worker", turn,
@@ -300,7 +336,7 @@ def worker_node(workspace, run_dir, tools, turn, prompt):
                       tools, True, WORKER_TIMEOUT_SECONDS))
 
 
-@ChiaFunction(resources={"opencode_creds": 1}, max_retries=0)
+@job(resources={"agent_creds": 1})
 def supervisor_node(workspace, run_dir, turn, summary):
     instructions = read_prompt("supervisor", campaign_port(run_dir)) + "\n\n"
     prompt = instructions + json.dumps(summary) + SUPERVISOR_OUTPUT

@@ -1,19 +1,20 @@
 """PortForge-TT controller: supervisor -> worker -> isolated TT jobs -> frozen full test.
 
 A campaign ports one model, described by a port pack (ports/<name>/), to Tenstorrent
-hardware. Run from this directory:
+hardware. Run from anywhere with the package installed:
 
-    python portforge_loop.py --port ports/chronos2 --hours 6 --detach
+    portforge --port ports/chronos2 --hours 6 --detach
 
-Continue an earlier campaign in a new archived run, optionally on another agent CLI,
-with a trusted note to both agents:
+or equivalently ``python -m portforge_tt.portforge_loop``. Continue an earlier
+campaign in a new archived run, optionally on another agent CLI, with a trusted
+note to both agents:
 
-    python portforge_loop.py --port ports/chronos2 --hours 4 --detach \
+    portforge --port ports/chronos2 --hours 4 --detach \
         --resume runs/<earlier-run> --agent claude --resume-note "..."
 
-Agents run on the local opencode CLI (default) or the Claude Code CLI (--agent claude);
---supervisor-agent selects the supervisor separately. Neither agent receives an
-earlier private port.
+Agents run on a selectable CLI backend: opencode (default), Claude Code
+(--agent claude) or Codex (--agent codex); --supervisor-agent selects the
+supervisor separately. Neither agent receives an earlier private port.
 """
 import argparse
 from datetime import datetime, timezone
@@ -75,18 +76,32 @@ if __name__ == '__main__' and '--controller' in sys.argv:
         raise ValueError('controller must execute its archived portforge_loop.py')
     os.environ.update({k: environment[k] for k in ('PYTHONPATH', 'PORTFORGE_REPOSITORY_ROOT')})
 
-import ray
-from chia.base.ChiaFunction import ChiaFunction, get
-from chia.base.tools.ChiaTool import ChiaTool
-from agent import worker_node, supervisor_node, repository_root, BACKENDS, DEFAULT_MODELS
-from runner import safe_file, write_json, validate_log_request, full_job_timeout
-from models import model_spec, use_registry
-from port import GUIDES, freeze as freeze_port, load_port, seed_documents
-from cluster import activated, identity as digest, load as load_cluster, ssh, upload, remote, reference_job
+if __package__:  # installed package or python -m portforge_tt.portforge_loop
+    from . import runtime, tracer
+    from .runtime import job, get
+    from .mcpserver import ToolServer
+    from .agents import worker_node, supervisor_node, repository_root, BACKENDS, DEFAULT_MODELS
+    from .runner import safe_file, write_json, validate_log_request, full_job_timeout
+    from .models import model_spec, use_registry
+    from .port import GUIDES, freeze as freeze_port, load_port, seed_documents
+    from .cluster import (activated, identity as digest, load as load_cluster,
+                          ssh, upload, remote, reference_job)
+    from .portforge_eval import check_suite
+else:  # flat: the frozen copy this run re-executes, or a direct script call
+    import runtime, tracer
+    from runtime import job, get
+    from mcpserver import ToolServer
+    from agents import worker_node, supervisor_node, repository_root, BACKENDS, DEFAULT_MODELS
+    from runner import safe_file, write_json, validate_log_request, full_job_timeout
+    from models import model_spec, use_registry
+    from port import GUIDES, freeze as freeze_port, load_port, seed_documents
+    from cluster import (activated, identity as digest, load as load_cluster,
+                         ssh, upload, remote, reference_job)
+    from portforge_eval import check_suite
 
 HERE = Path(__file__).resolve().parent
 # The model-specific half of the campaign. A frozen run harness carries its pack
-# (port.json beside this file), so the controller and every Ray worker load it at
+# (port.json beside this file), so the controller and every job load it at
 # import; the launcher selects one with --port before creating the run.
 PORT = load_port(HERE) if (HERE / 'port.json').is_file() else None
 
@@ -265,12 +280,31 @@ def supervisor_facts(workspace, run, config, model=None):
                          'full': 'Only submit(precision, model) after current-source bringup passes.'}}
 
 
+def _pack_evaluator():
+    """The pack's evaluator: the importable ``evaluate`` module when present
+    (the frozen harness or a pack on sys.path, so operator patches apply),
+    else loaded by path so no other module can shadow it."""
+    import importlib
+    import importlib.util
+    import sys
+    if 'evaluate' in sys.modules:
+        return sys.modules['evaluate']
+    try:
+        return importlib.import_module('evaluate')
+    except ImportError:
+        pass
+    spec = importlib.util.spec_from_file_location('portforge_pack_evaluate', PORT['dir'] / 'evaluate.py')
+    evaluator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evaluator)
+    return evaluator
+
+
 def check_suites(corpus, model):
     """Build every stage with the pack's evaluator and reject impossible gates before a run starts."""
+    # Load this pack's evaluator strictly by path so no other "evaluate" module
+    # can shadow it at launch time.
     import importlib.util
-    from portforge_eval import check_suite
-    # Load this pack's evaluator by path so no other "evaluate" module can shadow it.
-    spec = importlib.util.spec_from_file_location('portforge_pack_evaluate', PORT['dir'] / 'evaluate.py')
+    spec = importlib.util.spec_from_file_location('portforge_pack_evaluate_launch', PORT['dir'] / 'evaluate.py')
     evaluator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(evaluator)
     for stage in ('smoke', 'bringup', 'full'):
@@ -280,9 +314,8 @@ def check_suites(corpus, model):
 def suite_sizes(run, model):
     """Case counts of the fixed suites, from the pack's own evaluator (see CONTRACT.md for detail)."""
     try:
-        from evaluate import make_suite
         corpus = json.loads((Path(run) / 'corpus.json').read_text())
-        return {stage: {'cases': len(make_suite(corpus, stage, model)[0]['cases']),
+        return {stage: {'cases': len(_pack_evaluator().make_suite(corpus, stage, model)[0]['cases']),
                         'details': 'CONTRACT.md'} for stage in ('smoke', 'bringup')}
     except Exception as exc:  # the summary must not fail on an evaluator import problem
         return {'unavailable': type(exc).__name__, 'details': 'CONTRACT.md'}
@@ -543,8 +576,15 @@ def recover_timed_out_card(run, config, health, model):
 
 def validate_reference_archive(path, corpus, stage, model):
     """Inspect immutable short-stage oracle bytes before any remote extraction."""
-    from evaluate import make_suite, suite_model, validate_config, validate_receipt, validate_artifact
-    from models import unique_object
+    evaluator = _pack_evaluator()
+    make_suite, suite_model = evaluator.make_suite, evaluator.suite_model
+    validate_config = getattr(evaluator, 'validate_config')
+    validate_receipt = getattr(evaluator, 'validate_receipt')
+    validate_artifact = getattr(evaluator, 'validate_artifact')
+    if __package__:
+        from .models import unique_object
+    else:
+        from models import unique_object
     if stage not in ('smoke', 'bringup'):
         raise ValueError('only completed short reference stages can be imported')
     path = Path(path)
@@ -648,7 +688,7 @@ def cached_reference(run, stage, config, model):
         return None
     return record
 
-@ChiaFunction(resources={'reference': 1}, max_retries=0)
+@job(resources={'reference': 1})
 def reference(run_dir, stage, config, model=None):
     model = model or PORT['key']
     model_spec(model)
@@ -682,7 +722,7 @@ def reference(run_dir, stage, config, model=None):
     return result
 
 
-@ChiaFunction(resources={'tt': 1}, max_retries=0)
+@job(resources={'tt': 1})
 def experiment(run_dir, job, request, config):
     run, stage, endpoint = Path(run_dir), request.get('stage'), config['tt']
     try:
@@ -692,7 +732,7 @@ def experiment(run_dir, job, request, config):
             raise ValueError('public_input_stage requires run and smoke/bringup')
         input_stage = stage or public_stage
         ref = (cached_reference(run_dir, input_stage, config, model)
-               or get(reference.chia_remote(run_dir, input_stage, config, model))) if input_stage else None
+               or get(reference.submit(run_dir, input_stage, config, model))) if input_stage else None
         transport_timeout = (full_job_timeout(endpoint) + 400
                              if request.get('kind') == 'evaluate' and stage == 'full' else 22000)
         result = remote(config, run_dir, {'job': job, **request}, timeout=transport_timeout)
@@ -721,7 +761,7 @@ def experiment(run_dir, job, request, config):
     return result
 
 
-@ChiaFunction(resources={'reference': 1}, max_retries=0)
+@job(resources={'reference': 1})
 def precision_study(run_dir, job, config, model=None):
     model = model or PORT['key']
     """Matched short CUDA comparisons; FP32 oracle remains immutable."""
@@ -744,7 +784,7 @@ def precision_study(run_dir, job, config, model=None):
     return result
 
 
-class PortTools(ChiaTool):
+class PortTools(ToolServer):
     def setup(self, workspace, run_dir, model=None):
         model = model or PORT['key']
         model_spec(model)
@@ -806,7 +846,7 @@ class PortTools(ChiaTool):
         job = uuid.uuid4().hex
         write_json(self.run_dir / 'jobs' / job / 'source.json', files)
         write_json(self.run_dir / 'jobs' / job / 'request.json', {**request, 'code_sha256': code_hash(files)})
-        self.refs[job] = experiment.chia_remote(str(self.run_dir), job, {**request, 'files': files}, config)
+        self.refs[job] = experiment.submit(str(self.run_dir), job, {**request, 'files': files}, config)
         return {'job': job, 'status': 'running'}
 
     def run(self, command: str, timeout_seconds: int = 120, public_input_stage: str = '', model: str = '') -> dict:
@@ -981,6 +1021,12 @@ def freeze_harness(harness):
     for path in HERE.iterdir():
         if path.is_file() and path.suffix == '.py':
             shutil.copyfile(path, harness / path.name)
+    # The agents package travels flat inside the harness (its own relative
+    # imports keep working; only its parent-package imports switch).
+    (harness / 'agents').mkdir()
+    for path in (HERE / 'agents').iterdir():
+        if path.is_file() and path.suffix == '.py':
+            shutil.copyfile(path, harness / 'agents' / path.name)
     for folder in ('prompts', 'guides'):
         shutil.copytree(HERE / folder, harness / folder)
     freeze_port(PORT, harness)
@@ -989,7 +1035,9 @@ def freeze_harness(harness):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=Path, help='Port pack directory, e.g. ports/chronos2 (see ports/template)')
-    parser.add_argument('--cluster', type=Path, default=HERE / 'cluster.yaml')
+    parser.add_argument('--cluster', type=Path, default=None,
+                        help='Machine inventory (default: cluster.yaml in the working directory '
+                             'or beside the package)')
     parser.add_argument('--corpus', type=Path, help="Frozen benchmark (default: the pack's corpus.json)")
     parser.add_argument('--hours', type=float, default=6)
     parser.add_argument('--detach', action='store_true')
@@ -1007,6 +1055,13 @@ def main():
     parser.add_argument('--supervisor-agent', choices=BACKENDS, help='Supervisor agent CLI (default: --agent)')
     parser.add_argument('--supervisor-model', help='Supervisor model (default depends on its agent)')
     args = parser.parse_args()
+    if args.cluster is None:
+        for candidate in (Path.cwd() / 'cluster.yaml', HERE.parent / 'cluster.yaml'):
+            if candidate.is_file():
+                args.cluster = candidate
+                break
+        if args.cluster is None:
+            parser.error('no cluster.yaml found; copy the template and pass --cluster')
     if not args.controller:
         if not args.port:
             parser.error('--port is required (a directory under ports/)')
@@ -1032,7 +1087,9 @@ def main():
     model_spec(args.model)
     if not 0 < args.hours <= 24:
         parser.error('hours must be in (0,24]')
-    run = (args.run_dir or HERE / 'runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')).resolve()
+    # Run archives land under ./runs of the working directory (never inside an
+    # installed package), or exactly where --run-dir points.
+    run = (args.run_dir or Path.cwd() / 'runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')).resolve()
     if args.detach:
         if run.exists():
             parser.error('run directory already exists')
@@ -1124,20 +1181,21 @@ def main():
         write_json(run / 'status.json', {'status': value, 'time': datetime.now(timezone.utc).isoformat(), **extra})
     state('preflight')
     os.environ.update(agent_environment(manifest))
-    ray.init(num_cpus=8, include_dashboard=False, _node_ip_address='127.0.0.1',
-             runtime_env={'env_vars': {'PYTHONPATH': str(run / 'harness'),
-                                      'PORTFORGE_REPOSITORY_ROOT': manifest['repository_root'],
-                                      **agent_environment(manifest)}},
-             resources={'opencode_creds': 1, 'tt': int(config['tt']['resources'].get('tt', 1)), 'reference': 1})
-    from chia.trace.profiler import start_collector
-    start_collector(log_dir=str(run / 'chia-profile'))
+    # Local lease capacities (was ray.init(resources=...)): one agent
+    # credential, one reference pipeline, and the configured TT card count.
+    runtime.configure(agent_creds=1, reference=1,
+                      tt=int(config['tt'].get('resources', {}).get('tt', 1)))
+    os.environ.setdefault('PYTHONPATH', str(run / 'harness'))
+    tracer.start(str(run / 'trace'))
+    tracer.event('campaign.start', model=args.model, run=str(run), hours=args.hours,
+                 backends=manifest.get('agent_backends', {}))
     tools = None
     try:
         health = prepare(run, config)
         if manifest.get('reference_run'):
             import_references(run, manifest['reference_run'], config, args.model)
         tools = PortTools(name=tool_name(run), workspace=str(workspace), run_dir=str(run), model=args.model)
-        preflight = get(worker_node.chia_remote(str(workspace), str(run), [tools], 0,
+        preflight = get(worker_node.submit(str(workspace), str(run), [tools], 0,
             'Infrastructure check only: list files, read CONTRACT.md, confirm port_read ../outside is rejected. '
             'Do not implement or evaluate yet. End with PREFLIGHT_OK only if scoped tools work.'))
         if not preflight['success'] or not preflight['response'].strip().endswith('PREFLIGHT_OK'):
@@ -1145,7 +1203,7 @@ def main():
             return
         state('reference_preflight')
         try:
-            get(reference.chia_remote(str(run), 'smoke', config, args.model))
+            get(reference.submit(str(run), 'smoke', config, args.model))
         except Exception as exc:
             state('paused_reference', error=str(exc)[-1500:])
             return
@@ -1163,7 +1221,7 @@ def main():
             write_json(run / 'jobs' / study_job / 'request.json',
                        {'kind': 'reference-study', 'stage': 'precision-study', 'model': args.model, 'cluster_sha256': digest(config)})
             # Background CUDA context; its result is polled through port_status, never awaited.
-            _study = precision_study.chia_remote(str(run), study_job, config, args.model)
+            _study = precision_study.submit(str(run), study_job, config, args.model)
         end, turn, retries, timeouts = time.monotonic() + args.hours * 3600, 0, 0, 0
         previous = None
         while time.monotonic() < end:
@@ -1177,7 +1235,7 @@ def main():
                 continue
             if change == 'changed':
                 state('checking_replacement_reference')
-                get(reference.chia_remote(str(run), 'smoke', config, args.model))
+                get(reference.submit(str(run), 'smoke', config, args.model))
             health = remote(config, str(run), {'kind': 'health'})
             if not any(c['state'] == 'healthy' for c in health['cards']):
                 state('checking_timeout_recovery', health=health)
@@ -1187,7 +1245,7 @@ def main():
                 break
             facts = supervisor_facts(workspace, run, config, args.model)
             state('supervising', turn=turn, health=health, recent_jobs=facts['recent_jobs'])
-            review = get(supervisor_node.chia_remote(str(workspace), str(run), turn,
+            review = get(supervisor_node.submit(str(workspace), str(run), turn,
                 {**facts, 'health':health, 'worker_report':(previous or {}).get('response','')[-2000:],
                  'worker_error':(previous or {}).get('error',''),
                  'operator_note': manifest.get('operator_note', ''),
@@ -1203,7 +1261,7 @@ def main():
                 state('paused_supervisor', instruction=review['decision']['instruction']); break
             state('working', turn=turn, instruction=review['decision']['instruction'], health=health)
             note = manifest.get('operator_note', '')
-            previous = get(worker_node.chia_remote(str(workspace), str(run), [tools], turn,
+            previous = get(worker_node.submit(str(workspace), str(run), [tools], turn,
                 review['decision']['instruction'] + '\nContinue from your saved STATE.md. Call port_status(compact=True) before repeating tests.'
                 + ('\nOperator note (trusted; supplied by the controller, not an agent): ' + note if note else '')))
             if not previous['success']:
@@ -1225,7 +1283,7 @@ def main():
             state('full_validation', turn=turn)
             submission = json.loads((run / 'submission.json').read_text())
             frozen = json.loads((run / 'clusters' / (submission['cluster_sha256'] + '.json')).read_text())
-            result = get(experiment.chia_remote(str(run), 'final', {'kind':'evaluate','stage':'full',
+            result = get(experiment.submit(str(run), 'final', {'kind':'evaluate','stage':'full',
                 'files':submission['files'], 'precision':submission['precision'], 'model':submission.get('model', PORT['key'])}, frozen))
             state('accepted_research_port' if result.get('verdict',{}).get('passed') else 'full_failed')
     except BaseException as exc:
@@ -1234,7 +1292,9 @@ def main():
     finally:
         if tools:
             tools.stop()
-        ray.shutdown()
+        tracer.event('campaign.end')
+        tracer.stop()
+        runtime.shutdown()
 
 
 if __name__ == '__main__':

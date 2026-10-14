@@ -1,7 +1,16 @@
-"""CHIA cluster configuration and pinned SSH jobs; no SSH aliases or cloud creation."""
+"""Cluster inventory and pinned SSH jobs; no SSH aliases or cloud creation.
+
+The inventory parser reads the small subset of the (CHIA-compatible) cluster
+YAML schema PortForge actually uses — ``auth`` (global and per-IP SSH
+credentials), ``available_node_types`` (one host per role with its resource
+counts) and the ``porting`` section — with ``${VAR}`` environment expansion
+in values, matching the semantics the CHIA loader provided. Everything else
+in the file is ignored, so an existing cluster.yaml keeps working unchanged.
+"""
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -9,36 +18,82 @@ import subprocess
 import tarfile
 import time
 
-from chia.cluster.config import build_config, load_raw_config
-from runner import safe_file, write_json
+import yaml
+
+if __package__:  # installed as part of the portforge_tt package
+    from .runner import safe_file, write_json
+else:  # flat: a frozen run harness or a direct script execution
+    from runner import safe_file, write_json
 
 
 def identity(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def _expand_env_vars(data):
+    """Recursively expand ${VAR} references in values, leaving $VAR as-is."""
+    import re
+    if isinstance(data, str):
+        return re.sub(r'\$\{([^}]+)\}', lambda m: os.environ.get(m.group(1), m.group(0)), data)
+    if isinstance(data, dict):
+        return {_expand_env_vars(k): _expand_env_vars(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_expand_env_vars(item) for item in data]
+    return data
+
+
+def load_raw_config(path):
+    """Load the inventory YAML and expand environment variables in values."""
+    path = Path(path)
+    if not path.exists():
+        raise ValueError(f"cluster inventory not found: {path}")
+    with open(path) as stream:
+        raw = yaml.safe_load(stream)
+    if not isinstance(raw, dict):
+        raise ValueError("cluster inventory must be a YAML mapping")
+    return _expand_env_vars(raw)
+
+
+def _ssh_auth(raw, host):
+    """Resolve SSH credentials for *host*: per-IP override, else the globals."""
+    auth = raw.get('auth') or {}
+    override = (auth.get('overrides') or {}).get(host) or {}
+    user = override.get('ssh_user', auth.get('ssh_user'))
+    key = override.get('ssh_private_key', auth.get('ssh_private_key'))
+    proxy = override.get('ssh_proxy_command', auth.get('ssh_proxy_command'))
+    if not user:
+        raise ValueError(f"no SSH user configured for {host}")
+    return user, key, proxy
+
+
 def load(path):
     raw = load_raw_config(str(path))
-    native = build_config(raw)
+    node_types = raw.get('available_node_types') or {}
     endpoints = {}
     for role in ('tt', 'reference'):
-        options = dict(raw['porting'][role])
-        node = native.node_types[role]
-        if len(node.compatible_ips) != 1:
+        options = dict((raw.get('porting') or {}).get(role) or {})
+        if not options:
+            raise ValueError(f"porting.{role} section missing from the inventory")
+        node = node_types.get(role) or {}
+        hosts = node.get('compatible_ips') or []
+        if len(hosts) != 1:
             raise ValueError('select exactly one host per role; edit compatible_ips to replace it')
-        host = node.compatible_ips[0]
-        auth = native.get_ssh_auth(host)
+        host = hosts[0]
+        user, key, proxy = _ssh_auth(raw, host)
         if not re.fullmatch(r'[A-Za-z0-9_.:-]+', host) or host.startswith('-'):
             raise ValueError('invalid host')
-        if not re.fullmatch(r'[A-Za-z0-9_.-]+', auth.ssh_user) or auth.ssh_user.startswith('-'):
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', user) or user.startswith('-'):
             raise ValueError('invalid SSH user')
-        if not auth.ssh_private_key:
+        if not key:
             raise ValueError('explicit SSH key path required')
-        for key in ('work_dir', 'python'):
-            if not Path(options[key]).is_absolute() or '\n' in options[key]:
+        for key_name in ('work_dir', 'python'):
+            if not Path(options[key_name]).is_absolute() or '\n' in options[key_name]:
                 raise ValueError('runtime paths must be absolute')
         if role == 'tt' and 'weights_by_model' in options:
-            from models import model_spec
+            if __package__:
+                from .models import model_spec
+            else:
+                from models import model_spec
             weights = options['weights_by_model']
             if not isinstance(weights, dict) or not weights:
                 raise ValueError('weights_by_model must map model keys to checkpoint paths')
@@ -47,9 +102,9 @@ def load(path):
                 if (not isinstance(location, str) or not Path(location).is_absolute()
                         or '..' in Path(location).parts or '\n' in location):
                     raise ValueError('checkpoint paths must be absolute without traversal')
-        endpoints[role] = dict(options, host=host, user=auth.ssh_user,
-            key=str(Path(auth.ssh_private_key).expanduser()), proxy=auth.ssh_proxy_command,
-            resources=node.resources)
+        endpoints[role] = dict(options, host=host, user=user,
+            key=str(Path(key).expanduser()), proxy=proxy,
+            resources=node.get('resources') or {})
     if endpoints['reference']['executor'] not in ('direct', 'slurm'):
         raise ValueError('reference executor must be direct or slurm')
     return endpoints
@@ -113,7 +168,7 @@ def reference_job(endpoint, directory, command, gpu, record):
                'export HF_HOME=' + q(endpoint['hf_home']) + '\n')
     if gpu and endpoint['executor'] == 'direct':
         # Separate controllers share this dedicated GPU; serialize measurements
-        # and model loading across campaigns, not merely within one Ray runtime.
+        # and model loading across campaigns, not merely within one controller.
         script += 'exec 8>' + q(endpoint['work_dir'] + '/.gpu-reference.lock') + '\nflock 8\n'
     if endpoint.get('pythonpath'):
         script += 'export PYTHONPATH=' + q(endpoint['pythonpath']) + '\n'

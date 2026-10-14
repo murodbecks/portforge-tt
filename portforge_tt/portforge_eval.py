@@ -15,7 +15,10 @@ from pathlib import Path
 import socket
 import time
 
-from models import model_spec, verify_checkpoint
+if __package__:  # installed as part of the portforge_tt package
+    from .models import model_spec, verify_checkpoint
+else:  # flat: a frozen run harness or a direct script execution
+    from models import model_spec, verify_checkpoint
 
 # TT storage formats an evaluator may accept. BFP8_B is block floating point.
 TT_PRECISIONS = ("bf16", "fp32", "fp16", "bfp8_b")

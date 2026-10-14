@@ -7,7 +7,7 @@
 #              environment that imports ttnn and torch
 #   reference  a host that runs the model's reference implementation in FP32
 #              (an NVIDIA GPU is preferred; CPU works and is recorded)
-# The CHIA controller and the coding agents run on the machine you launch from.
+# The PortForge controller and the coding agents run on the machine you launch from.
 cluster_name: portforge-tt
 provider:
   head_ip: 127.0.0.1

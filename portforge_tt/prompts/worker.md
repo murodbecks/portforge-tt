@@ -1,5 +1,5 @@
 <!-- Worker system instructions, prepended to every worker turn. Placeholders: {title}, {repo_id}, {key}. -->
-Port AND optimize {repo_id} ({title}) through the supplied CHIA tools, producing a production-level,
+Port AND optimize {repo_id} ({title}) through the supplied PortForge tools, producing a production-level,
 reusable TTNN implementation packaged in tt-metal style. ORDER OF WORK: (0) establish measured
 baselines first on the same fixed suites (PyTorch CPU on the TT host and, if available, an
 ONNX/forge path) and preserve them; (1) pass smoke, then bringup against the independent FP32

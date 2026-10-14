@@ -12,7 +12,7 @@ import port
 from cluster import identity
 
 HARNESS = support.HARNESS
-PACKS = sorted(path for path in (HARNESS / "ports").iterdir() if (path / "port.json").is_file())
+PACKS = sorted(path for path in (support.ROOT / "ports").iterdir() if (path / "port.json").is_file())
 REAL = [path for path in PACKS if path.name != "template"]
 
 
@@ -62,7 +62,6 @@ class PortPackTests(unittest.TestCase):
                                       capture_output=True, text=True)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual([line.split()[0] for line in done.stdout.split("\n") if line], ["smoke", "bringup", "full"])
-
     def test_check_suite_rejects_consistency_cases_without_a_target(self):
         from portforge_eval import check_suite
         spec = {"stage": "full", "cases": [{"name": "batch4", "clips": ["a", "b"]},
@@ -86,7 +85,7 @@ class PortPackTests(unittest.TestCase):
 
     def test_agent_documents_use_the_shared_tool_names(self):
         stale = re.compile(r"\b(?:nllb|chronos|esm2?|parakeet)_(files|read|write|run|evaluate|status|log|submit)\b")
-        for path in list((HARNESS / "ports").glob("*/*.md")) + list((HARNESS / "guides").glob("*.md")):
+        for path in list((support.ROOT / "ports").glob("*/*.md")) + list((HARNESS / "guides").glob("*.md")):
             with self.subTest(path=path.name):
                 self.assertIsNone(stale.search(path.read_text()), path)
 
@@ -95,16 +94,20 @@ class PortPackTests(unittest.TestCase):
                              r"google_compute|tt-blackhole-\d")
         # RFC 5737 documentation ranges are the intended placeholders in test fixtures.
         documentation = ("192.0.2.", "198.51.100.", "203.0.113.")
-        for path in HARNESS.rglob("*"):
-            if not path.is_file() or path.suffix not in (".py", ".md", ".json", ".yaml", ".sh") or "__pycache__" in path.parts:
+        excluded = {".git", ".venv", "venv", "runs", "assets", "dist", "build",
+                    "__pycache__", "portforge_tt.egg-info"}
+        for path in support.ROOT.rglob("*"):
+            if not path.is_file() or path.suffix not in (".py", ".md", ".json", ".yaml", ".sh"):
+                continue
+            if any(part in excluded for part in path.parts):
                 continue
             if path.name == "corpus.json" or path.name == "README.md" or path == Path(__file__):
                 continue
             for match in pattern.finditer(path.read_text()):
                 if match.group(0) == "127.0.0.1" or match.group(0).startswith(documentation):
                     continue
-                with self.subTest(path=str(path.relative_to(HARNESS)), match=match.group(0)):
-                    self.fail(f"site-specific detail {match.group(0)!r} in {path.relative_to(HARNESS)}")
+                with self.subTest(path=str(path.relative_to(support.ROOT)), match=match.group(0)):
+                    self.fail(f"site-specific detail {match.group(0)!r} in {path.relative_to(support.ROOT)}")
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ expensive to repeat. Use public research and the pinned installed source.
 7. Produce the tt-metal-style deliverable from CONTRACT.md: importable,
    configurable backend; standalone forecast CLI; portable tests that import
    actual code and accept configurable fixtures rather than execute Markdown or
-   require CHIA's `/input` and `/weights`; package layout with SPDX headers.
+   require the sandbox's `/input` and `/weights`; package layout with SPDX headers.
    Prepare the branch name, commit message and PR body early (lesson: GitHub
    submission access was discovered missing at the END last time); the human
    operator reviews, signs and submits the PR.

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "portforge-tt"
-version = "1.0.0"
-description = "Autonomous model porting to Tenstorrent hardware with TTNN, powered by CHIA"
+version = "2.0.0"
+description = "Autonomous model porting to Tenstorrent hardware with TTNN: supervisor/worker agents, trusted FP32 evaluator, sandboxed TT jobs"
 readme = "README.md"
-license = "Apache-2.0"
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 authors = [{ name = "Abror Shopulatov" }]
-keywords = ["tenstorrent", "ttnn", "model-porting", "autonomous", "chia", "hardware"]
+keywords = ["tenstorrent", "ttnn", "model-porting", "autonomous", "agents", "mcp", "hardware"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -18,8 +18,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "chialoops>=1.0.0",
-    "ray>=2.40.0",
+    "mcp>=1.27.1,<2",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
     "pyyaml>=6.0",
     "numpy>=1.24.0",
 ]
@@ -27,12 +28,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pre-commit>=3.0"]
 
+[project.scripts]
+portforge = "portforge_tt.portforge_loop:main"
+
 [tool.setuptools]
-packages = ["ports", "guides", "prompts"]
-py-modules = [
-    "agent", "cluster", "compare", "models", "port",
-    "portforge_eval", "portforge_loop", "runner",
-]
+packages = ["portforge_tt", "portforge_tt.agents"]
+
+[tool.setuptools.package-data]
+portforge_tt = ["prompts/*.md", "guides/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
