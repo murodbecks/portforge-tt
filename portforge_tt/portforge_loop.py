@@ -614,16 +614,17 @@ def validate_reference_archive(path, corpus, stage, model):
         if (identity['model_key'] != model or spec.get('model') != pinned['repo_id']
                 or spec.get('revision') != pinned['revision']):
             raise ValueError('reference model identity missing or different')
-        for key in ('stage', 'corpus_sha256', 'max_audio_seconds', 'gates', 'timed_repeats'):
-            if spec.get(key) != expected[key]:
-                raise ValueError('reference corpus or fixed suite differs: ' + key)
+        comparable = lambda doc: {k: v for k, v in doc.items() if k != 'cases'}
+        if comparable(spec) != comparable(expected):
+            raise ValueError('reference corpus or fixed suite differs')
         if spec.get('cases', []) != expected['cases']:
             raise ValueError('reference cases differ from the frozen stage')
         if [case.get('name') for case in meta.get('cases', [])] != [case['name'] for case in spec['cases']]:
             raise ValueError('partial reference case results')
         policy = meta.get('precision', {})
         effective = policy.get('effective', {})
-        if (policy.get('requested') != 'fp32' or meta.get('parameter_dtypes') not in (['float32'], ['torch.float32'])
+        if (policy.get('requested') != 'fp32' or meta.get('parameter_dtypes') not in
+                (['float32'], ['torch.float32'], ['fp32'])
                 or any(effective.get(k) != 'fp32' for k in ('mode', 'weights', 'activations'))):
             raise ValueError('import requires an explicit FP32 reference')
         validate_config(read('input/config.json'), pinned)
@@ -824,7 +825,7 @@ class PortTools(ToolServer):
         target.write_text(content)
         return {'saved': path}
 
-    def start(self, request):
+    def _start_job(self, request):
         files = snapshot(self.workspace)
         stage = request.get('stage')
         config = activated(self.run_dir)
@@ -861,8 +862,8 @@ class PortTools(ToolServer):
             raise ValueError('public_input_stage must be empty, smoke or bringup')
         model = model or getattr(self, 'model', PORT['key'])
         model_spec(model)
-        return self.start({'kind': 'run', 'command': command, 'timeout': min(timeout_seconds, 300),
-                           'public_input_stage': public_input_stage, 'model': model})
+        return self._start_job({'kind': 'run', 'command': command, 'timeout': min(timeout_seconds, 300),
+                                'public_input_stage': public_input_stage, 'model': model})
 
     def evaluate(self, stage: str = 'smoke', precision: str = 'bf16', model: str = '') -> dict:
         """Independent CUDA-reference check: smoke (tiny) or bringup (short behavior suite).
@@ -876,7 +877,7 @@ class PortTools(ToolServer):
             raise ValueError('use smoke/bringup; full is controller-only after submission')
         if not (self.workspace / 'backend.py').exists():
             raise ValueError('backend.py required')
-        return self.start({'kind': 'evaluate', 'stage': stage, 'precision': precision, 'model': model})
+        return self._start_job({'kind': 'evaluate', 'stage': stage, 'precision': precision, 'model': model})
 
     def status(self, compact: bool = False, job_id: str = '') -> dict:
         """Collect recent results and every pending job, including older background studies.

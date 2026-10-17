@@ -34,10 +34,10 @@ Blackhole p150, tt-metal `fd80faa3`, FP32 references on an A100:
 
 | pack | smoke | bringup | full | tt-metal PR |
 |---|---|---|---|---|
-| nllb (bf16) | PASS | PASS 8/8 | 17/20 | [#57398](https://github.com/tenstorrent/tt-metal/pull/57398) (merged) |
-| chronos2 (bf16) | PASS (NRMSE 0.009) | PASS (NRMSE 0.043) | not run | [#57764](https://github.com/tenstorrent/tt-metal/pull/57764) (merged) |
-| esm2 (bf16) | PASS (NRMSE 0.030) | FAIL 4/8 | not run | [#57833](https://github.com/tenstorrent/tt-metal/pull/57833) (approved) |
-| parakeet (bf16) | PASS (NRMSE 0.018) | PASS 8/8 (NRMSE 0.033) | 18/20 | [#57845](https://github.com/tenstorrent/tt-metal/pull/57845) (approved) |
+| nllb (bf16) | PASS | PASS 8/8 | 17/20 | [#57398](https://github.com/tenstorrent/tt-metal/pull/57398) |
+| chronos2 (bf16) | PASS (NRMSE 0.009) | PASS (NRMSE 0.043) | not run | [#57764](https://github.com/tenstorrent/tt-metal/pull/57764) |
+| esm2 (bf16) | PASS (NRMSE 0.030) | FAIL 4/8 | not run | [#57833](https://github.com/tenstorrent/tt-metal/pull/57833) |
+| parakeet (bf16) | PASS (NRMSE 0.018) | PASS 8/8 (NRMSE 0.033) | 18/20 | [#57845](https://github.com/tenstorrent/tt-metal/pull/57845) |
 
 Full-corpus misses are bf16 near-tie logits; each pack's `CONTRACT.md` has the device evidence and the rejected fp32/mixed-precision variants. Chronos-2 and ESM-2 ship their corpora in the pack; the NLLB and Parakeet corpora rebuild from the provenance in `ports/<name>/SOURCES.md`. Runs archived before the CHIA-free rewrite are inspectable but not resumable.
 

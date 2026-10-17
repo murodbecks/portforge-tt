@@ -157,8 +157,12 @@ def validate_input_preservation(expected, observed):
         raise ValueError("backend input set changed")
     for name, original in expected.items():
         value = observed[name]
-        if (not isinstance(value, np.ndarray) or value.dtype != original.dtype
-                or not np.array_equal(value, original, equal_nan=True)):
+        if not isinstance(value, np.ndarray) or value.dtype != original.dtype:
+            raise ValueError("backend mutated caller input: " + name)
+        # equal_nan is only valid for float dtypes; string/integer inputs compare exactly.
+        equal = (np.array_equal(value, original, equal_nan=True) if original.dtype.kind == "f"
+                 else np.array_equal(value, original))
+        if not equal:
             raise ValueError("backend mutated caller input: " + name)
 
 
